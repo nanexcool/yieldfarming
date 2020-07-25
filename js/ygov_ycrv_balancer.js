@@ -10,6 +10,7 @@ async function main() {
     _print(`Initialized ${App.YOUR_ADDRESS}`);
     _print("Reading smart contracts...");
 
+    const MULTICALL = new ethers.Contract(MULTICALL_ADDR, MULTICALL_ABI, App.provider);
     const YGOV_2_BPT_POOL = new ethers.Contract(YGOV_BPT_2_STAKING_POOL_ADDR, YGOV_BPT_2_STAKING_POOL_ABI, App.provider);
     const YFI_YCRV_BALANCER_POOL = new ethers.Contract(YFI_YCRV_BPT_TOKEN_ADDR, BALANCER_POOL_ABI, App.provider);
     const YFI_YCRV_BPT_TOKEN_CONTRACT = new ethers.Contract(YFI_YCRV_BPT_TOKEN_ADDR, ERC20_ABI, App.provider);
@@ -18,46 +19,65 @@ async function main() {
     const YFI_TOKEN_STAKING_POOL = new ethers.Contract(YFI_STAKING_POOL_ADDR, YFI_STAKING_POOL_ABI, App.provider);
     const Y_TOKEN_CONTRACT = new ethers.Contract(Y_TOKEN_ADDR, ERC20_ABI, App.provider);
 
-    const stakedBPTAmount = await YGOV_2_BPT_POOL.balanceOf(App.YOUR_ADDRESS) / 1e18;
-    const earnedYFI_raw = await YGOV_2_BPT_POOL.earned(App.YOUR_ADDRESS);
+    const [blockNumber, result1] = await MULTICALL.callStatic.aggregate([
+        [YGOV_2_BPT_POOL.address, YGOV_2_BPT_POOL.interface.encodeFunctionData('balanceOf', [App.YOUR_ADDRESS])],
+        [YGOV_2_BPT_POOL.address, YGOV_2_BPT_POOL.interface.encodeFunctionData('earned', [App.YOUR_ADDRESS])],
+        [YFI_YCRV_BALANCER_POOL.address, YFI_YCRV_BALANCER_POOL.interface.encodeFunctionData('totalSupply', [])],
+        [YFI_YCRV_BPT_TOKEN_CONTRACT.address, YFI_YCRV_BPT_TOKEN_CONTRACT.interface.encodeFunctionData('balanceOf', [YGOV_BPT_2_STAKING_POOL_ADDR])],
+        [YFI_YCRV_BALANCER_POOL.address, YFI_YCRV_BALANCER_POOL.interface.encodeFunctionData('getBalance', [YFI_TOKEN_ADDR])],
+        [YFI_YCRV_BALANCER_POOL.address, YFI_YCRV_BALANCER_POOL.interface.encodeFunctionData('getBalance', [Y_TOKEN_ADDR])],
+        [YGOV_2_BPT_POOL.address, YGOV_2_BPT_POOL.interface.encodeFunctionData('voteLock', [App.YOUR_ADDRESS])],
+    ]);
 
+    const stakedBPTAmount = YGOV_2_BPT_POOL.interface.decodeFunctionResult('balanceOf', result1[0]) / 1e18;
+    const earnedYFI_raw = YGOV_2_BPT_POOL.interface.decodeFunctionResult('earned', result1[1]);
+    
     const earnedYFI = earnedYFI_raw / 1e18;
-    const totalBPTAmount = await YFI_YCRV_BALANCER_POOL.totalSupply() / 1e18;
-    const totalStakedBPTAmount = await YFI_YCRV_BPT_TOKEN_CONTRACT.balanceOf(YGOV_BPT_2_STAKING_POOL_ADDR) / 1e18;
-    const totalYFIAmount = await YFI_YCRV_BALANCER_POOL.getBalance(YFI_TOKEN_ADDR) / 1e18;
-    const totalYAmount = await YFI_YCRV_BALANCER_POOL.getBalance(Y_TOKEN_ADDR) / 1e18;
-    const voteLockBlock = await YGOV_2_BPT_POOL.voteLock(App.YOUR_ADDRESS);
-    const currentBlock = await App.provider.getBlockNumber();
-    const currentBlockTime = await getBlockTime();
+    const totalBPTAmount = YFI_YCRV_BALANCER_POOL.interface.decodeFunctionResult('totalSupply', result1[2]) / 1e18;
+    const totalStakedBPTAmount = YFI_YCRV_BPT_TOKEN_CONTRACT.interface.decodeFunctionResult('balanceOf', result1[3]) / 1e18;
+    const totalYFIAmount = YFI_YCRV_BALANCER_POOL.interface.decodeFunctionResult('getBalance', result1[4]) / 1e18;
+    const totalYAmount = YFI_YCRV_BALANCER_POOL.interface.decodeFunctionResult('getBalance', result1[5]) / 1e18;
+    const voteLockBlock = YGOV_2_BPT_POOL.interface.decodeFunctionResult('voteLock', result1[6]);
+
+    const currentBlock = blockNumber / 1;
 
     const isBPTLocked = voteLockBlock > currentBlock;
 
     let BPTLockedMessage = "NO";
     let _print_BPTLocked = _print;
     if (isBPTLocked) {
+        const currentBlockTime = await getBlockTime();
         let timeUntilFree = forHumans((voteLockBlock - currentBlock) * currentBlockTime);
         BPTLockedMessage = "YES - locked for approx. " + timeUntilFree;
         _print_BPTLocked = _print_bold;
     }
 
+    const [, result2] = await MULTICALL.callStatic.aggregate([
+        [YFI_TOKEN_STAKING_POOL.address, YFI_TOKEN_STAKING_POOL.interface.encodeFunctionData('balanceOf', [App.YOUR_ADDRESS])],
+        [YFI_TOKEN_CONTRACT.address, YFI_TOKEN_CONTRACT.interface.encodeFunctionData('balanceOf', [YFI_STAKING_POOL_ADDR])],
+        [YFI_TOKEN_STAKING_POOL.address, YFI_TOKEN_STAKING_POOL.interface.encodeFunctionData('earned', [App.YOUR_ADDRESS])],
+        [YFI_TOKEN_CONTRACT.address, YFI_TOKEN_CONTRACT.interface.encodeFunctionData('balanceOf', [App.YOUR_ADDRESS])],
+        [CURVE_Y_POOL.address, CURVE_Y_POOL.interface.encodeFunctionData('get_virtual_price', [])],
+    ]);
+
     // ycrv rewards
-    const stakedYFIAmount = await YFI_TOKEN_STAKING_POOL.balanceOf(App.YOUR_ADDRESS) / 1e18;
-    const totalStakedYFIAmount = await YFI_TOKEN_CONTRACT.balanceOf(YFI_STAKING_POOL_ADDR) / 1e18;
-    const earnedYCRV = await YFI_TOKEN_STAKING_POOL.earned(App.YOUR_ADDRESS) / 1e18;
+    const stakedYFIAmount = YFI_TOKEN_STAKING_POOL.interface.decodeFunctionResult('balanceOf', result2[0]) / 1e18;
+    const totalStakedYFIAmount = YFI_TOKEN_CONTRACT.interface.decodeFunctionResult('balanceOf', result2[1]) / 1e18;
+    const earnedYCRV = YFI_TOKEN_STAKING_POOL.interface.decodeFunctionResult('earned', result2[2]) / 1e18;
     const weekly_yCRV_reward = await get_synth_weekly_rewards(YFI_TOKEN_STAKING_POOL);
     const yCRVRewardPerToken = weekly_yCRV_reward / totalStakedYFIAmount;
 
     const YFIPerBPT = totalYFIAmount / totalBPTAmount;
     const YPerBPT = totalYAmount / totalBPTAmount;
 
-    const currentYFI = await YFI_TOKEN_CONTRACT.balanceOf(App.YOUR_ADDRESS);
+    const currentYFI = YFI_TOKEN_CONTRACT.interface.decodeFunctionResult('balanceOf', result2[3]);
 
     // Find out reward rate
     const weekly_reward = await get_synth_weekly_rewards(YGOV_2_BPT_POOL);
     const rewardPerToken = weekly_reward / totalStakedBPTAmount;
 
     // Find out underlying assets of Y
-    const YVirtualPrice = await CURVE_Y_POOL.get_virtual_price() / 1e18;
+    const YVirtualPrice = CURVE_Y_POOL.interface.decodeFunctionResult('get_virtual_price', result2[4]) / 1e18;
 
     _print("Finished reading smart contracts... Looking up prices... \n")
 
